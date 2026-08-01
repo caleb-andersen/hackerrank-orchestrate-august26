@@ -1,7 +1,9 @@
 """Central configuration for the notification router."""
 
 import os
+from types import MappingProxyType
 from pathlib import Path
+from typing import Mapping
 
 from dotenv import load_dotenv
 
@@ -60,11 +62,43 @@ TRACE_DIR: Path = Path("traces")
 # Checkpoints stay in a repository-relative ignored cache directory.
 CACHE_DIR: Path = Path(".cache")
 
-# TODO: Set after calibration against the sample file in a later task.
-BRAND_MIN_AGE_DAYS: int
-# TODO: Set after calibration against the sample file in a later task.
-BRAND_MAX_REPORTS: int
-# TODO: Set after calibration against the sample file in a later task.
-DISMISS_MUTE_THRESHOLD: float
-# TODO: Set after calibration against the sample file in a later task.
-MIN_PEER_HISTORY: int
+# History recency decays by half every thirty days.
+RECENCY_HALF_LIFE_DAYS: float = 30.0
+# The dossier offers at most six ranked historical precedents.
+EVIDENCE_TOP_K: int = 6
+# Evidence below this relevance score is omitted.
+EVIDENCE_MIN_SCORE: float = 0.12
+# Evidence scoring weights form an interpretable weighted mean.
+W_SAME_PEER: float = 0.35
+W_LEXICAL: float = 0.25
+W_SAME_GROUP: float = 0.15
+W_EVENT: float = 0.15
+W_RECENCY: float = 0.10
+# Stronger user actions make a history row more relevant evidence.
+EVENT_RELEVANCE: Mapping[str, float] = MappingProxyType(
+    {
+        "reported": 1.0,
+        "muted_after": 0.9,
+        "replied": 0.7,
+        "dismissed": 0.6,
+        "opened": 0.3,
+    }
+)
+# Repetition exposes only the strongest three near-duplicates.
+NEAR_DUPLICATE_TOP_K: int = 3
+# Independent short messages normally fall below this trigram overlap.
+NEAR_DUPLICATE_MIN_JACCARD: float = 0.45
+# Sender bursts are measured over the preceding day.
+BURST_WINDOW_HOURS: int = 24
+# Text similarity uses unpadded character trigrams.
+TRIGRAM_N: int = 3
+# A business account younger than one year is not trusted on age alone.
+BRAND_MIN_AGE_DAYS: int = 365
+# A sender domain younger than six months is not trusted on age alone.
+BRAND_MIN_DOMAIN_AGE_DAYS: int = 180
+# Report pressure becomes adverse above the midpoint of the measured gap.
+BRAND_MAX_REPORTS: int = 29
+# A sender this user dismisses at least half the time has earned suppression.
+DISMISS_MUTE_THRESHOLD: float = 0.5
+# One prior message already reads as a dismiss rate; demanding more discards evidence.
+MIN_PEER_HISTORY: int = 1
