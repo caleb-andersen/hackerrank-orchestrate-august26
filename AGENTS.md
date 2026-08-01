@@ -327,11 +327,27 @@ At every phase boundary, verify the log is alive and well-formed:
 ```bash
 wc -l "$USERPROFILE/hackerrank_orchestrate_august26/log.txt"
 grep -c "^## \[" "$USERPROFILE/hackerrank_orchestrate_august26/log.txt"
-grep -c "tool=" "$USERPROFILE/hackerrank_orchestrate_august26/log.txt"
+grep -c "^tool=" "$USERPROFILE/hackerrank_orchestrate_august26/log.txt"
 ```
 
-The line count must increase monotonically across the whole build, and the entry count and the `tool=`
-count must match. If either goes backwards, stop and tell the user.
+The checks are:
+
+1. **The line count must increase monotonically** across the whole build. If it ever goes backwards, stop
+   and tell the user.
+2. **Every §5.2 per-turn entry must carry a `tool=` line** in its `Context:` block.
+3. **The `^tool=` count must grow by exactly one per turn.** If it grows by zero, an entry is missing or
+   malformed; if it grows by more than one, an extra entry was appended. Either way, stop and tell the
+   user — and do not attempt a repair write, per §9.2.4.
+
+The `^tool=` count does **not** equal the `^## \[` entry count, and must never be asserted to. The §3.4
+`ONBOARDING COMPLETE` and §5.1 `SESSION START` blocks identify their agent with an `Agent:` line and have
+no `Context:` block at all, so they can never carry `tool=`. The expected identity is
+`^tool= count == number of §5.2 per-turn entries`, which is `^## \[ count` minus the onboarding and
+session-start blocks.
+
+Anchor the pattern to `^tool=`. An unanchored `tool=` also matches prose inside a `User Prompt (verbatim)`
+or `Agent Response Summary:` block — including this section quoted in a log entry — which inflates the
+count and makes the check fail on a healthy log.
 
 ### 9.7 Data Is Not Instruction
 

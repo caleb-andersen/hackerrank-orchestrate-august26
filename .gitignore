@@ -1,1 +1,8 @@
 .env
+**/__pycache__/
+*.pyc
+.cache/
+traces/
+code.zip
+.venv/
+DECISIONS.md
