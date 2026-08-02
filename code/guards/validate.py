@@ -226,6 +226,26 @@ class ValidationIssue:
     field: str | None = None
 
 
+# The two style codes that describe the *shape* of the prose and nothing else. A reason
+# of 165 characters, or one that ran to two sentences, says nothing about whether the
+# action, the message type, the evidence or the axes are sound — those four have already
+# been validated in full by the time reason style is checked, because reason style is the
+# last stage. So these two are repairable: the decision is kept and the sentence is
+# rewritten from the dossier.
+#
+# The other three style codes are deliberately NOT repairable, because each one reports
+# that the sentence's *content* is wrong rather than its shape. ``reason_person`` and
+# ``reason_meta_language`` mean the sentence stopped describing the message — and
+# meta-language in particular is what a reason looks like when the model has been drawn
+# into text that was addressing the machinery, which is the §9.7 case where a
+# conservative fallback is the right answer. ``reason_trigger_noun`` means the sentence
+# names nothing observable, so the row could not be audited from its own reason. Those
+# three keep the conservative fallback.
+REPAIRABLE_REASON_CODES: frozenset[str] = frozenset(
+    ("reason_length", "reason_sentence_count")
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationFailure:
     """Exception-free validation result returned to the retry/fallback caller."""
@@ -234,12 +254,35 @@ class ValidationFailure:
     issues: tuple[ValidationIssue, ...]
     coercion_count: int = 0
     dropped_evidence_message_ids: tuple[str, ...] = ()
+    # Populated only on the ``reason_style`` stage, where every other field has already
+    # passed. It carries the model's decision with the model's own style-failing reason
+    # still attached, so the caller can keep the five valid fields and replace the one
+    # invalid one. ``None`` on every other stage, where no part of the decision is known
+    # to be sound.
+    repairable_decision: "ValidatedDecision | None" = None
 
     @property
     def codes(self) -> tuple[str, ...]:
         """Expose compact issue codes for retry telemetry and tests."""
 
         return tuple(issue.code for issue in self.issues)
+
+    @property
+    def is_reason_style_only(self) -> bool:
+        """Report whether this failure is a pure prose-shape violation.
+
+        True only when the stage is ``reason_style``, a decision was carried out, and
+        every issue is one of ``REPAIRABLE_REASON_CODES``. A mixed failure — a length
+        violation *and* meta-language — is not repairable, because the second code is a
+        content finding and the conservative fallback is the documented answer to it.
+        """
+
+        return (
+            self.stage == "reason_style"
+            and self.repairable_decision is not None
+            and bool(self.issues)
+            and set(self.codes) <= REPAIRABLE_REASON_CODES
+        )
 
 
 ValidationResult = ValidatedDecision | ValidationFailure
@@ -672,16 +715,7 @@ def coerce_and_check(
         )
 
     reason = cast(str, raw["reason"])
-    style_issues = reason_issues(reason)
-    if style_issues:
-        return ValidationFailure(
-            stage="reason_style",
-            issues=style_issues,
-            coercion_count=coercion_count,
-            dropped_evidence_message_ids=dropped_evidence,
-        )
-
-    return ValidatedDecision(
+    decision = ValidatedDecision(
         action=cast(Action, action),
         message_type=message_type,
         reason=reason,
@@ -696,3 +730,19 @@ def coerce_and_check(
         material_harm=cast(bool, raw.get("material_harm", False)),
         coercion_count=coercion_count,
     )
+
+    # Reason style is checked last, and deliberately so: everything above has to hold
+    # before the prose is worth judging. That ordering is what makes a style failure
+    # separable — the decision below is fully validated apart from its sentence, so it
+    # rides out on the failure rather than being discarded with it.
+    style_issues = reason_issues(reason)
+    if style_issues:
+        return ValidationFailure(
+            stage="reason_style",
+            issues=style_issues,
+            coercion_count=coercion_count,
+            dropped_evidence_message_ids=dropped_evidence,
+            repairable_decision=decision,
+        )
+
+    return decision

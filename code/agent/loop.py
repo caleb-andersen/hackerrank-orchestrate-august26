@@ -48,7 +48,7 @@ import logging
 import time
 import base64
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agent.client import (
@@ -77,6 +77,7 @@ from config import (
 from context import media as media_module
 from context.features import Dossier
 from context.retrieval import EvidenceCandidate
+from guards import reason_repair
 from guards.decision import ValidatedDecision
 from guards.validate import ValidationFailure, coerce_and_check, reason_issues
 
@@ -96,9 +97,36 @@ FALLBACK_MESSAGE_TYPE = "unknown"
 # The reason shipped when the descriptive sentence cannot be built inside the style
 # contract — a long group name or a full stop in a display name would otherwise produce
 # an invalid cell.
+#
+# It used to assert that the message "could not be checked against the sender's history",
+# on every fallback path regardless of what actually failed. On a row whose retrieval had
+# succeeded and whose decision was discarded for a two-sentence reason, that sentence was
+# simply false, in a graded column, about the row's own failure. What ships now is true of
+# every class that reaches a fallback, and the per-class sentences below are true of their
+# own class specifically.
 GENERIC_FALLBACK_REASON = (
-    "This message could not be checked against the sender's history, so it is held for "
-    "the digest rather than dropped."
+    "This message is held for the digest because no usable decision was recorded against "
+    "the sender's history."
+)
+
+# What each failure class may truthfully say about itself. The clause is appended to a
+# descriptor naming the message, and each one carries a concrete trigger noun of its own
+# so the sentence satisfies the contract even where the descriptor does not supply one.
+_NO_DECISION_CLAUSE = (
+    " was not decided against the sender's history before the attempt ended, so it is "
+    "held for the digest."
+)
+_SHAPE_CLAUSE = (
+    " came back in a shape the sender's history checks cannot accept, so it is held for "
+    "the digest."
+)
+_INVARIANT_CLAUSE = (
+    " came back with a decision its own cited history did not support, so it is held for "
+    "the digest."
+)
+_STYLE_CLAUSE = (
+    " came back with a reason naming nothing observable in the sender's history, so it is "
+    "held for the digest."
 )
 
 
@@ -127,8 +155,9 @@ class RawDecision:
 
     ``decision`` is populated on every path, including failures, so the caller has
     something for the gate to run over and something to write. ``outcome`` is
-    ``"submitted"`` exactly when the model produced a decision that passed validation;
-    every other value names the failure that produced the conservative fallback.
+    ``"submitted"`` when the model produced a decision that passed validation outright and
+    ``"reason_repaired"`` when it produced a sound decision whose sentence alone failed on
+    shape; every other value names the failure that produced the conservative fallback.
     """
 
     message_id: str
@@ -136,11 +165,21 @@ class RawDecision:
     outcome: str = "submitted"
     failure_reason: str | None = None
     last_text: str = ""
+    # The model's own sentence on a ``reason_repaired`` row, kept for audit. ``None``
+    # everywhere else.
+    rejected_reason: str | None = None
     metrics: RowMetrics = field(default_factory=RowMetrics)
 
     @property
     def is_fallback(self) -> bool:
-        return self.outcome != "submitted"
+        """Whether this row shipped the conservative default instead of a decision.
+
+        ``reason_repaired`` is not a fallback. The action, message type, confidence,
+        evidence and axes on such a row are the model's own and passed validation in
+        full; only the sentence was rewritten. Counting it here would report a
+        conservative substitution the run did not make.
+        """
+        return self.outcome not in ("submitted", "reason_repaired")
 
 
 # --------------------------------------------------------------------------------------
@@ -626,7 +665,31 @@ def _media_descriptor(dossier: Dossier) -> str:
     return ""
 
 
-def _fallback_reason(dossier: Dossier) -> str:
+def _failure_clause(outcome: str, detail: str | None) -> str:
+    """Choose the clause that is true about *this* failure.
+
+    ``detail`` on a validation failure is ``"{stage}: {codes}"``, so the stage prefix is
+    what distinguishes a decision that came back malformed from one that came back
+    self-contradictory from one whose sentence named nothing. Every other outcome —
+    ``budget_exhausted``, ``loop_error``, and every ``ProviderClientError`` outcome —
+    means no decision was returned at all, which is the one case the original wording was
+    ever true of.
+    """
+    if outcome != "validation_rejected" or not detail:
+        return _NO_DECISION_CLAUSE
+    stage = detail.split(":", 1)[0].strip()
+    if stage in ("schema", "coercion"):
+        return _SHAPE_CLAUSE
+    if stage == "invariants":
+        return _INVARIANT_CLAUSE
+    if stage == "reason_style":
+        # Only the non-repairable style codes reach a fallback now; the repairable pair is
+        # handled in ``_drive`` and never arrives here.
+        return _STYLE_CLAUSE
+    return _NO_DECISION_CLAUSE
+
+
+def _fallback_reason(dossier: Dossier, outcome: str, detail: str | None) -> str:
     """Write the reason for the one path where code, not the model, is the author.
 
     The failure detail that used to appear here was an internal validator code, stripped
@@ -635,15 +698,16 @@ def _fallback_reason(dossier: Dossier) -> str:
     machinery rather than the message. The detail is not lost: ``RawDecision.failure_reason``
     carries it verbatim into the per-row trace, which is where a debugging string belongs.
 
-    What ships instead describes the message and states the deferral. It is checked against
-    the same ``reason_issues`` contract the model is held to, so this path cannot emit a
-    cell the router would have rejected from the model; a descriptor that fails the check
-    — an over-long group name, a full stop inside a display name — falls back to
-    ``GENERIC_FALLBACK_REASON``.
+    What ships instead describes the message and states the deferral **in terms that are
+    true of the failure that actually happened**. It is checked against the same
+    ``reason_issues`` contract the model is held to, so this path cannot emit a cell the
+    router would have rejected from the model; a descriptor that fails the check — an
+    over-long group name, a full stop inside a display name — falls back to
+    ``GENERIC_FALLBACK_REASON``, which is true of every class that reaches here.
     """
     reason = (
-        f"{_sender_descriptor(dossier)}{_media_descriptor(dossier)} could not be checked "
-        "against the sender's history and is held for the digest."
+        f"{_sender_descriptor(dossier)}{_media_descriptor(dossier)}"
+        f"{_failure_clause(outcome, detail)}"
     )
     return reason if not reason_issues(reason) else GENERIC_FALLBACK_REASON
 
@@ -679,15 +743,20 @@ def _fallback_message_type(dossier: Dossier) -> str:
     return FALLBACK_MESSAGE_TYPE
 
 
-def fallback_decision(dossier: Dossier, detail: str) -> ValidatedDecision:
+def fallback_decision(
+    dossier: Dossier, detail: str, outcome: str = "validation_rejected"
+) -> ValidatedDecision:
     candidates = dossier.evidence_candidates
     LOGGER.info(
-        "fallback_row message_id=%s detail=%s", dossier.message_id, detail
+        "fallback_row message_id=%s outcome=%s detail=%s",
+        dossier.message_id,
+        outcome,
+        detail,
     )
     return ValidatedDecision(
         action=FALLBACK_ACTION,
         message_type=_fallback_message_type(dossier),
-        reason=_fallback_reason(dossier),
+        reason=_fallback_reason(dossier, outcome, detail),
         confidence=CONF_FLOOR,
         # Cite the top candidate rather than nothing: the row is still auditable, and an
         # empty citation on a row that had candidates is itself a contract violation.
@@ -747,6 +816,10 @@ class _RunState:
     last_text: str = ""
     validation_failures: list[str] = field(default_factory=list)
     inspected: set[str] = field(default_factory=set)
+    # The sentence a repaired row shipped without. Kept so the repair is auditable from
+    # the trace alone: the previous policy discarded the whole decision and recorded
+    # nothing of it, which left no way to check after the fact what had been thrown away.
+    rejected_reason: str | None = None
 
     def record(self, result: FallbackResult) -> tuple[str, list[object]]:
         self.model_calls += 1
@@ -771,10 +844,12 @@ class _RunState:
         decision, outcome, detail = result
         return RawDecision(
             message_id=self.dossier.message_id,
-            decision=decision or fallback_decision(self.dossier, detail or outcome),
+            decision=decision
+            or fallback_decision(self.dossier, detail or outcome, outcome),
             outcome=outcome,
             failure_reason=detail,
             last_text=self.last_text,
+            rejected_reason=self.rejected_reason,
             metrics=RowMetrics(
                 model=client.model,
                 models_tried=client.models_tried,
@@ -791,6 +866,48 @@ class _RunState:
                 validation_failures=tuple(self.validation_failures),
             ),
         )
+
+
+def _terminal(
+    failure: ValidationFailure, dossier: Dossier, state: _RunState
+) -> tuple[ValidatedDecision | None, str, str | None]:
+    """Decide what survives a twice-rejected decision.
+
+    A style violation in one field is not grounds to discard the other five. Reason style
+    is the last validation stage, so by the time it fails the action, message type,
+    confidence, evidence and axes have each passed in full — throwing a sound routing
+    judgement away because its explanation ran to 165 characters is a bug in the failure
+    policy, not a safety behaviour. Where the only complaints are
+    ``REPAIRABLE_REASON_CODES``, the decision is kept and the sentence is rewritten from
+    the dossier by ``reason_repair``.
+
+    Everything else keeps the conservative fallback, and that distinction is the point: a
+    schema failure, an unrecognised label or a violated invariant each mean some part of
+    the judgement itself is unsound, and none of them can be repaired by rewriting prose.
+    The non-repairable style codes belong on that side too — see
+    ``validate.REPAIRABLE_REASON_CODES`` for why.
+
+    The rejected sentence is carried into the trace rather than dropped. Losing it is what
+    made the previous round of this failure unauditable after the fact.
+    """
+    detail = f"{failure.stage}: {','.join(failure.codes)}"
+    if not failure.is_reason_style_only:
+        return None, "validation_rejected", detail
+
+    decision = failure.repairable_decision
+    assert decision is not None  # guaranteed by is_reason_style_only
+    state.rejected_reason = decision.reason
+    LOGGER.info(
+        "reason_repaired message_id=%s codes=%s action=%s",
+        dossier.message_id,
+        ",".join(failure.codes),
+        decision.action,
+    )
+    return (
+        replace(decision, reason=reason_repair.repair(dossier, decision)),
+        "reason_repaired",
+        detail,
+    )
 
 
 def _drive(
@@ -864,7 +981,7 @@ def _drive(
             if rejections > 1:
                 # One retry, not a loop: a model that has misread the contract twice
                 # spends the remaining budget reproducing the same answer.
-                return None, "validation_rejected", f"{outcome.stage}: {','.join(outcome.codes)}"
+                return _terminal(outcome, dossier, state)
             results.append(_rejection(submitted.call_id, outcome))
 
         if iteration == MAX_TOOL_ITERATIONS:
@@ -892,5 +1009,5 @@ def _drive(
         if isinstance(outcome, ValidatedDecision):
             return outcome, "submitted", None
         state.validation_failures.extend(outcome.codes)
-        return None, "validation_rejected", f"{outcome.stage}: {','.join(outcome.codes)}"
+        return _terminal(outcome, dossier, state)
     return None, "budget_exhausted", f"no decision in {state.iterations} turns"

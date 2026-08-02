@@ -419,6 +419,9 @@ def write_trace(
         "outcome": raw.outcome,
         "failure_reason": raw.failure_reason,
         "last_model_text": raw.last_text,
+        # The sentence a reason_repaired row shipped without. Present so a repair can be
+        # checked against what it replaced without re-running the row.
+        "rejected_reason": raw.rejected_reason,
         "evidence_candidates": [
             candidate.history_message_id
             for candidate in plan.dossier.evidence_candidates

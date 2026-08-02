@@ -926,16 +926,70 @@ class FallbackRowTest(unittest.TestCase):
     """The row the model could not decide still ships a legible, scoreable cell."""
 
     def test_the_reason_never_carries_an_internal_failure_code(self) -> None:
-        reason = _fallback_reason(_dossier())
+        reason = _fallback_reason(
+            _dossier(), "validation_rejected", "reason_style: reason_trigger_noun"
+        )
         for token in ("reason_style", "reason_length", "reason_sentence_count", "_"):
             self.assertNotIn(token, reason)
         self.assertEqual(reason_issues(reason), ())
 
     def test_the_reason_names_the_message_and_the_deferral(self) -> None:
-        reason = _fallback_reason(_dossier(conversation_type="business"))
+        reason = _fallback_reason(
+            _dossier(conversation_type="business"), "budget_exhausted", None
+        )
         self.assertIn("business notice", reason)
         self.assertIn("digest", reason)
         self.assertEqual(reason_issues(reason), ())
+
+    def test_every_failure_class_ships_a_contract_clean_sentence(self) -> None:
+        for outcome, detail in (
+            ("validation_rejected", "schema: missing_field"),
+            ("validation_rejected", "coercion: invalid_action"),
+            ("validation_rejected", "invariants: I3"),
+            ("validation_rejected", "reason_style: reason_meta_language"),
+            ("budget_exhausted", "no decision in 5 turns"),
+            ("refusal", "ProviderClientError: declined"),
+            ("loop_error", "KeyError: 'x'"),
+        ):
+            for conversation_type in ("business", "group", "personal"):
+                with self.subTest(outcome=outcome, detail=detail, ct=conversation_type):
+                    reason = _fallback_reason(
+                        _dossier(conversation_type=conversation_type), outcome, detail
+                    )
+                    self.assertEqual(reason_issues(reason), ())
+
+    def test_a_history_check_failure_is_claimed_only_when_no_decision_came_back(
+        self,
+    ) -> None:
+        """The false-statement regression: this claim once shipped after a style reject.
+
+        Retrieval had in fact surfaced the right evidence on those rows, so asserting the
+        history could not be checked was untrue in a graded column. The claim now belongs
+        to the one class it describes — the classes where no decision was returned at all.
+        """
+        for outcome, detail in (
+            ("validation_rejected", "schema: missing_field"),
+            ("validation_rejected", "invariants: I5"),
+            ("validation_rejected", "reason_style: reason_person"),
+        ):
+            with self.subTest(detail=detail):
+                reason = _fallback_reason(_dossier(), outcome, detail)
+                self.assertNotIn("was not decided against", reason)
+
+        no_decision = _fallback_reason(_dossier(), "budget_exhausted", None)
+        self.assertIn("was not decided against", no_decision)
+
+    def test_each_failure_class_gets_a_distinct_sentence(self) -> None:
+        reasons = {
+            _fallback_reason(_dossier(), outcome, detail)
+            for outcome, detail in (
+                ("validation_rejected", "schema: missing_field"),
+                ("validation_rejected", "invariants: I3"),
+                ("validation_rejected", "reason_style: reason_meta_language"),
+                ("budget_exhausted", None),
+            )
+        }
+        self.assertEqual(len(reasons), 4)
 
     def _with_group_name(self, name: str):
         dossier = _dossier(conversation_type="group")
@@ -953,7 +1007,9 @@ class FallbackRowTest(unittest.TestCase):
         # A real sentence boundary inside a group name would make the cell two sentences,
         # so the personalised descriptor is abandoned for the generic cell.
         broken = self._with_group_name("Water Crew. Emergency Line")
-        self.assertEqual(_fallback_reason(broken), GENERIC_FALLBACK_REASON)
+        self.assertEqual(
+            _fallback_reason(broken, "budget_exhausted", None), GENERIC_FALLBACK_REASON
+        )
         self.assertEqual(reason_issues(GENERIC_FALLBACK_REASON), ())
 
     def test_an_abbreviation_in_a_descriptor_keeps_the_personalised_cell(self) -> None:
@@ -963,7 +1019,9 @@ class FallbackRowTest(unittest.TestCase):
         read every "." as terminal. Naming the group is strictly more useful, so the
         degrade must fire only on a descriptor that genuinely breaks the contract.
         """
-        reason = _fallback_reason(self._with_group_name("Dr. Rao's Clinic"))
+        reason = _fallback_reason(
+            self._with_group_name("Dr. Rao's Clinic"), "budget_exhausted", None
+        )
         self.assertIn("Dr. Rao's Clinic", reason)
         self.assertNotEqual(reason, GENERIC_FALLBACK_REASON)
         self.assertEqual(reason_issues(reason), ())

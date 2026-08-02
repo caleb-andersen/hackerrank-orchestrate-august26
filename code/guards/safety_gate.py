@@ -76,6 +76,7 @@ from guards.decision import (
     ValidatedDecision,
 )
 from guards.injection import looks_like_injection
+from guards.reason_repair import percent, plural
 from guards.solicitation import asks_for_credential, demands_payment
 from guards.validate import reason_issues
 
@@ -147,13 +148,11 @@ def _quote(phrase: str) -> str:
     return trimmed
 
 
-def _percent(rate: float) -> str:
-    return f"{round(rate * 100)}%"
-
-
-def _plural(count: int, noun: str) -> str:
-    """Agree the noun with its count, because the reason cell is a graded column."""
-    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+# One definition, shared with the failure policy's reason repair. Both author reason
+# cells in code against the same style contract, and two copies of the same formatter
+# would eventually disagree about how a rate or a count is written.
+_percent = percent
+_plural = plural
 
 
 def _severity(action: str) -> int:
