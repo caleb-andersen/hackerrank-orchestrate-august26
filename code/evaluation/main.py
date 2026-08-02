@@ -13,9 +13,16 @@ from config import (  # noqa: E402
     MAX_CONCURRENCY,
     OUTPUT_PATH,
 )
+from agent.client import ProviderClientError  # noqa: E402
 from evaluation.consistency import (  # noqa: E402
     audit_full_predictions,
     print_consistency_report,
+)
+from evaluation.judge import (  # noqa: E402
+    gold_rows,
+    prediction_rows,
+    print_judge_report,
+    score_rows,
 )
 from evaluation.metrics import evaluate_metrics, print_metric_report  # noqa: E402
 from evaluation.records import load_gold_samples, load_predictions  # noqa: E402
@@ -25,7 +32,14 @@ from evaluation.validate_output import (  # noqa: E402
 )
 
 
-REASON_QUALITY = 1.0  # TODO: replace with the judge-provided reason-quality score.
+# The reason-quality term used when --no-judge is passed or the judge cannot be reached.
+#
+# It is 0.0 rather than the old 1.0 stub because the failure this replaces was a metric being
+# claimed rather than measured: a stub of 1.0 awarded a full 15% of the composite for a column
+# nothing had looked at, and it flattered every score printed before this module existed. Zero
+# cannot be mistaken for a measurement. The composite line always states which term it used, so
+# an unjudged run is visibly 0.15 lower than a judged one rather than quietly comparable to it.
+UNMEASURED_REASON_QUALITY = 0.0
 
 
 def composite_score(
@@ -101,6 +115,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--no-dnd", action="store_true")
+    parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help=(
+            "skip the reason-quality judge. The composite then carries "
+            f"reason_quality={UNMEASURED_REASON_QUALITY:.1f} and says so, rather than "
+            "substituting a value nothing measured."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
     if args.workers < 1:
@@ -149,11 +172,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     if consistency_report is not None:
         print_consistency_report(consistency_report)
 
+    reason_quality = UNMEASURED_REASON_QUALITY
+    reason_quality_source = "NOT MEASURED (--no-judge)"
+    if not args.no_judge:
+        try:
+            # Gold is scored every run as the reference line. After the first run its rows are
+            # content-hash cache hits, so this costs no model calls until the rubric changes —
+            # which is exactly when the reference does need recomputing.
+            gold_report = score_rows(
+                gold_rows(args.dataset),
+                label="GOLD reasons (reference line)",
+                workers=args.workers,
+            )
+            prediction_report = score_rows(
+                prediction_rows(predictions_path),
+                label=f"predictions ({predictions_path})",
+                workers=args.workers,
+            )
+        except (ProviderClientError, OSError, ValueError) as error:
+            print(f"REASON JUDGE UNAVAILABLE: {type(error).__name__}: {error}")
+            reason_quality_source = f"NOT MEASURED ({type(error).__name__})"
+        else:
+            print_judge_report(gold_report)
+            print_judge_report(prediction_report)
+            reason_quality = prediction_report.mean_normalized
+            gold_quality = gold_report.mean_normalized
+            delta = reason_quality - gold_quality
+            reason_quality_source = (
+                f"measured, gold reference {gold_quality:.4f}, delta {delta:+.4f}"
+            )
+            if prediction_report.failure_count:
+                reason_quality_source += (
+                    f", {prediction_report.failure_count} row(s) unscored"
+                )
+
     score = composite_score(
         metric_report.action_accuracy,
         metric_report.type_accuracy,
         metric_report.evidence_f1,
-        REASON_QUALITY,
+        reason_quality,
         metric_report.calibration_error,
     )
     print(
@@ -161,7 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "0.35*action_accuracy + 0.25*type_accuracy + 0.15*evidence_f1 + "
         "0.15*reason_quality + 0.10*(1-calibration_error)"
     )
-    print(f"COMPOSITE SCORE: {score:.6f} (reason_quality stub={REASON_QUALITY:.1f})")
+    print(f"COMPOSITE SCORE: {score:.6f} (reason_quality={reason_quality:.4f} — {reason_quality_source})")
 
     metric_shape_failed = bool(
         metric_report.missing_prediction_ids or metric_report.extra_prediction_ids
