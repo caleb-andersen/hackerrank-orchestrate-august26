@@ -1,0 +1,5 @@
+# Runtime dependencies pinned for Python 3.14.
+anthropic==0.120.2
+openai==2.52.0
+pillow==12.3.0
+python-dotenv==1.2.2

@@ -21,10 +21,24 @@ Read [`problem_statement.md`](./problem_statement.md) for the full task spec, in
 ├── AGENTS.md                         # Rules for AI coding tools + transcript logging
 ├── problem_statement.md              # Full challenge statement
 ├── README.md                         # You are here
+├── requirements.txt                  # Pinned runtime dependencies
+├── .env.example                      # Names of the two required environment variables
+├── code/                             # The solution — see code/README.md to run it
+│   ├── README.md                     # Setup, run commands, architecture, limitations
+│   ├── SPEC_features.md              # Feature-by-feature specification of the dossier
+│   ├── main.py                       # Router entry point
+│   ├── config.py                     # Every tunable constant, each read on a live path
+│   ├── data/                         # CSV loading and frozen row schemas
+│   ├── context/                      # Dossier construction: features, retrieval, media
+│   ├── agent/                        # Prompt, tool schemas, provider client, tool loop
+│   ├── guards/                       # Validation, injection scan, deterministic gate
+│   ├── output/                       # Order-preserving CSV writer and checkpoints
+│   ├── evaluation/                   # Scoring harness — the only reader of gold labels
+│   └── tests/                        # Unit and property tests
 └── dataset/
     ├── messages.csv                  # Messages to route
-    ├── output.csv                    # Blank submission template
-    ├── sample_messages.csv           # Solved examples
+    ├── output.csv                    # Submission CSV, pre-keyed in a shuffled order
+    ├── sample_messages.csv           # Solved examples (evaluation-only, see §9.8)
     ├── users.csv                     # User notification behavior
     ├── groups.csv                    # Group metadata
     ├── group_members.csv             # User-group relationships
@@ -109,9 +123,10 @@ python code/evaluation/main.py
 It routes the labelled samples without exposing their gold fields to the production
 runner, prints field-level metrics and the composite tuning score, validates the full
 `dataset/output.csv`, and audits near-duplicate consistency across all 110 predictions.
-To rescore an existing sample run without making model calls, pass
-`--predictions dataset/output.samples.csv`. The two full-set checks can also be run
-independently:
+To rescore an existing sample run without re-running the router, pass
+`--predictions dataset/output.samples.csv`; add `--no-judge` to skip the reason-quality
+judge as well, which is the only remaining source of model calls on that path. The two
+full-set checks can also be run independently:
 
 ```text
 python code/evaluation/validate_output.py

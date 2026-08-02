@@ -158,7 +158,3 @@ class MediaRef:
         """Compatibility alias for context code that predates media resolution."""
 
         return self.path
-
-    @property
-    def absolute_path(self) -> Path | None:
-        return self.path
