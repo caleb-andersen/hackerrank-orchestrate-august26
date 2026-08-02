@@ -348,7 +348,7 @@ before the row is written.
 # ---------------------------------------------------------------------------------------
 # Evidence
 # ---------------------------------------------------------------------------------------
-# Two failure shapes, both silent:
+# Three failure shapes, all silent:
 #
 # 1. A cited id that was never offered. Ids look guessable, so a model that has seen a few
 #    will assemble a plausible one. Anything outside the candidate set is dropped by the
@@ -361,6 +361,17 @@ before the row is written.
 #    nothing: it is a justification that refutes itself in the same row. The validator
 #    enforces this pairing for the specific case of a mute that rests on unwantedness
 #    rather than on risk.
+#
+# 3. A second citation added to fill the cap. This one is invisible to the action columns and
+#    shows up only in evidence precision, because every spurious id is a false positive on a
+#    row whose decision may be perfectly correct. Two things push toward it: a cap stated as
+#    a bare number reads as a target, and `evidence_enum` in agent/tools.py enumerates
+#    permutations, so with six candidates thirty of the thirty-six offered values are pairs
+#    and a model picking a plausible-looking value lands on a pair by default. The rule below
+#    therefore states the ceiling as a ceiling, gives a test the second id must pass — it
+#    supports a claim the first does not — and names the enum shape so it is not read as a
+#    hint. This is a prompt rule rather than a tighter cap because the labelled gold does
+#    cite two ids on some rows, and a cap of one could not represent them.
 EVIDENCE_RULES = f"""\
 # EVIDENCE
 
@@ -375,6 +386,18 @@ candidates are the only citable ids in existence for this row.
     them must be cited.
   * Never cite the message being routed. Evidence is history.
 
+One citation is the normal answer. {MAX_EVIDENCE_IDS} is a ceiling, not a target, and not a
+quota to fill. Cite a second id only when it supports a claim the first does not — a
+separate fact your reason actually rests on, such as a pattern the first citation cannot
+establish alone, or a second recorded outcome that carries different weight from the first.
+A second candidate that merely repeats, resembles or reinforces the first is not a second
+piece of evidence; it is the same evidence twice, and it costs precision without adding
+justification. If you cannot name the distinct claim the second id carries, cite one.
+
+The submit tool lists every accepted combination, so most of the values it offers are pairs.
+That is an artefact of enumerating the options, not a recommendation. Choose the shape of
+your answer from the evidence you actually used, then pick the value that matches it.
+
 When the decision rests on behaviour — that this recipient ignores this sender, tolerates
 this group, opens everything this business sends — the cited candidate must be one whose
 recorded outcome demonstrates that behaviour. A suppression cites a dismissal, a mute or a
@@ -383,7 +406,8 @@ rather than on risk is checked for exactly this and is rejected without it.
 
 Cite the candidate an auditor would open first to check this row, not simply the
 highest-scoring one. The retrieval score ranks relatedness; you are choosing the one that
-carries the justification you actually used.
+carries the justification you actually used. That candidate leads, because the first id is
+read as the primary support for the decision.
 """
 
 
