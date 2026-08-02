@@ -3,9 +3,19 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import Literal
 
 
 ACTIONS: tuple[str, ...] = ("notify", "digest", "mute")
+# Decision 1's three axes, in the spelling the prompt teaches and the tool schema
+# enumerates. ``guards.validate`` accepts these plus legacy internal spellings, and
+# checks at import that every value here is one it can map.
+RISK_AXES: tuple[str, ...] = ("clean", "suspicious", "scam_or_unsafe")
+RELEVANCE_AXES: tuple[str, ...] = ("wanted", "neutral", "unwanted")
+URGENCY_AXES: tuple[str, ...] = ("immediate", "today", "none")
+# The structured observation a model must record after opening an attachment. Rendered
+# into the submit tool's schema, so an off-vocabulary corroboration verdict is unemittable.
+CORROBORATION: tuple[str, ...] = ("yes", "partial", "no")
 MESSAGE_TYPES: tuple[str, ...] = (
     "personal",
     "urgent",
@@ -138,4 +148,17 @@ class DailyNotificationSummary:
 @dataclass(frozen=True, slots=True)
 class MediaRef:
     media_id: str
-    file_path: Path
+    kind: Literal["image", "voice"] | None
+    path: Path | None
+    exists: bool
+    sha256: str | None
+
+    @property
+    def file_path(self) -> Path | None:
+        """Compatibility alias for context code that predates media resolution."""
+
+        return self.path
+
+    @property
+    def absolute_path(self) -> Path | None:
+        return self.path

@@ -30,6 +30,10 @@ JUDGE_MODEL: str = "gpt-5.6-terra"
 
 # Tool loops stop after four iterations to bound cost and runaway behavior.
 MAX_TOOL_ITERATIONS: int = 4
+# One routing turn never needs more than this; thinking and text share the budget.
+MAX_OUTPUT_TOKENS: int = 8_000
+# Routing is a bounded judgement over precomputed facts, not open-ended research.
+DECISION_EFFORT: str = "medium"
 # Image inspection is capped at two calls so one message cannot dominate the budget.
 MAX_INSPECT_IMAGE_CALLS: int = 2
 # At most two historical messages may be cited to keep evidence focused.
@@ -52,6 +56,12 @@ MAX_IMAGE_DIMENSION: int = 1024
 CONF_FLOOR: float = 0.55
 # Reported confidence cannot exceed 0.95 because routing decisions retain uncertainty.
 CONF_CEIL: float = 0.95
+# Media that contradicts the message text costs confidence without moving the action.
+MEDIA_MISMATCH_CONFIDENCE_PENALTY: float = 0.05
+# A sender with no history and no citable precedent is a weaker basis for any routing.
+FIRST_CONTACT_CONFIDENCE_PENALTY: float = 0.05
+# A row where deterministic code overrode the model is capped here, inside the mute band.
+HARD_BLOCK_CONFIDENCE: float = 0.85
 
 # Dataset inputs are resolved from the repository working directory.
 DATASET_DIR: Path = Path("dataset")
@@ -92,6 +102,23 @@ NEAR_DUPLICATE_MIN_JACCARD: float = 0.45
 BURST_WINDOW_HOURS: int = 24
 # Text similarity uses unpadded character trigrams.
 TRIGRAM_N: int = 3
+# Published per-million-token rates, used only to price the run report. A model absent
+# here has its tokens reported under "unpriced" rather than costed at a guessed rate.
+MODEL_PRICE_PER_MTOK: Mapping[str, tuple[float, float]] = MappingProxyType(
+    {
+        "claude-opus-5": (5.00, 25.00),
+        "claude-sonnet-5": (3.00, 15.00),
+        "claude-haiku-4-5": (1.00, 5.00),
+    }
+)
+# A cached prefix is re-read at a tenth of the input rate. Without this the run report
+# would price a cache hit as if it were a fresh read and the saving would be invisible.
+CACHE_READ_MULTIPLIER: float = 0.10
+# Writing a prefix into the five-minute cache costs a quarter more than reading it
+# uncached. Two reads pay that premium back; one read does not, which is exactly the
+# question the cache_read counter in the run report exists to answer.
+CACHE_WRITE_MULTIPLIER: float = 1.25
+
 # A business account younger than one year is not trusted on age alone.
 BRAND_MIN_AGE_DAYS: int = 365
 # A sender domain younger than six months is not trusted on age alone.

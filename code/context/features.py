@@ -105,6 +105,10 @@ class GroupContext:
     admin_count: int
     group_messages_30d: int
     user_role: str
+    # The *sender's* standing in this group, which is a different fact from the
+    # receiving user's role and is what the safety gate's admin carve-outs read.
+    # None when the sender is not a recorded member of the group.
+    sender_role: str | None
     group_muted_by_user: bool
     user_messages_sent_30d: int
     user_messages_read_30d: int
@@ -341,6 +345,13 @@ def _group_context(dataset: Dataset, message: Message) -> GroupContext | None:
     )
     if group is None or member is None:
         return None
+    sender: GroupMember | None = (
+        None
+        if message.sender_user_id is None
+        else dataset.group_members_by_group_user.get(
+            (message.group_id, message.sender_user_id)
+        )
+    )
     return GroupContext(
         group_id=group.group_id,
         group_name=group.group_name,
@@ -349,6 +360,7 @@ def _group_context(dataset: Dataset, message: Message) -> GroupContext | None:
         admin_count=group.admin_count,
         group_messages_30d=group.messages_30d,
         user_role=member.role,
+        sender_role=None if sender is None else sender.role,
         group_muted_by_user=member.group_muted_by_user,
         user_messages_sent_30d=member.messages_sent_30d,
         user_messages_read_30d=member.messages_read_30d,

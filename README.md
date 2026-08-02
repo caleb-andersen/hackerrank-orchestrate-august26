@@ -100,6 +100,33 @@ The scoring will consider:
 
 Strong systems will combine retrieval, structured metadata, behavioral history, safety checks, OCR/ASR handling, and contextual reasoning.
 
+Run the complete local evaluation workflow directly from the repository root:
+
+```text
+python code/evaluation/main.py
+```
+
+It routes the labelled samples without exposing their gold fields to the production
+runner, prints field-level metrics and the composite tuning score, validates the full
+`dataset/output.csv`, and audits near-duplicate consistency across all 110 predictions.
+To rescore an existing sample run without making model calls, pass
+`--predictions dataset/output.samples.csv`. The two full-set checks can also be run
+independently:
+
+```text
+python code/evaluation/validate_output.py
+python code/evaluation/consistency.py
+```
+
+Both default to `dataset/output.csv`. To check a file elsewhere, pass it with the
+`--output` flag — **these scripts take named flags, not a positional path**, so
+`validate_output.py output.csv` exits 2 with an argparse error rather than validating
+anything:
+
+```text
+python code/evaluation/validate_output.py --output dataset/output.csv
+```
+
 ---
 
 ## Chat Transcript Logging

@@ -1,6 +1,7 @@
 """Load the twelve non-label dataset CSVs into typed records and indexes."""
 
 import csv
+import hashlib
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -161,6 +162,14 @@ def _media_path(raw_path: str, dataset_dir: Path, source_path: Path) -> Path:
         if resolved.is_file():
             return resolved
     raise ValueError(f"Media path must resolve to a file inside the dataset directory: {source_path}")
+
+
+def _media_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _unique_index(records: list[_Record], key: Callable[[_Record], _Key], name: str) -> dict[_Key, _Record]:
@@ -394,14 +403,20 @@ def load_dataset(dataset_dir: str | Path) -> Dataset:
     images = [
         MediaRef(
             media_id=_required(row, "image_id", images_path),
-            file_path=_media_path(_required(row, "file_path", images_path), root, images_path),
+            kind="image",
+            path=(media_path := _media_path(_required(row, "file_path", images_path), root, images_path)),
+            exists=True,
+            sha256=_media_sha256(media_path),
         )
         for row in _read_csv(images_path, ("image_id", "file_path"))
     ]
     voice_notes = [
         MediaRef(
             media_id=_required(row, "voice_note_id", voice_notes_path),
-            file_path=_media_path(_required(row, "file_path", voice_notes_path), root, voice_notes_path),
+            kind="voice",
+            path=(media_path := _media_path(_required(row, "file_path", voice_notes_path), root, voice_notes_path)),
+            exists=True,
+            sha256=_media_sha256(media_path),
         )
         for row in _read_csv(voice_notes_path, ("voice_note_id", "file_path"))
     ]

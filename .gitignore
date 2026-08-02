@@ -3,6 +3,10 @@
 *.pyc
 .cache/
 traces/
+# Partial-run outputs. dataset/output.csv is the deliverable and stays tracked; these are
+# what --limit and --samples write instead of overwriting it.
+dataset/output.subset.csv
+dataset/output.samples.csv
 code.zip
 .venv/
 DECISIONS.md
