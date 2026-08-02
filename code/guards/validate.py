@@ -160,7 +160,53 @@ _META_LANGUAGE: frozenset[str] = frozenset(
     )
 )
 _WORD_PATTERN = re.compile(r"[a-z0-9]+")
-_ONE_SENTENCE_PATTERN = re.compile(r"[^.!?\r\n]+[.!?]")
+
+# The one-sentence rule used to be `[^.!?\r\n]+[.!?]` matched with `fullmatch`, which treats
+# every "." as a sentence boundary. That rejects the reasons the style contract actually asks
+# for: REASON_CONTRACT tells the model to name the concrete detail that decided the row, and
+# the concrete details in this dataset are amounts ("Rs. 2,500"), times ("4.30 p.m."), titles
+# ("Dr. Rao"), order references ("order no. 4821") and decimals ("0.75"). Each one contains a
+# period that ends nothing. A rejected reason is retried and then falls back to the
+# conservative default, so the validator was converting the best-evidenced rows into
+# digest/unknown — the guard was penalising compliance with the prompt.
+#
+# The contract is unchanged: exactly one sentence, terminal punctuation, 60–160 characters.
+# Only the counter is fixed. A period is a sentence boundary unless it is one of the
+# non-terminal forms below, so these are masked out of the body before the body is checked
+# for any remaining terminator. Masking is deliberately conservative — an unlisted
+# abbreviation is still read as a boundary and still rejected, which fails toward the old
+# behaviour rather than toward silently accepting two sentences.
+_DECIMAL_POINT = re.compile(r"\d\.(?=\d)")
+# Written to match both "p.m." mid-sentence and the "p.m" left behind once a reason that
+# ends on the abbreviation has had its terminator split off.
+_CLOCK_MERIDIEM = re.compile(r"\b[ap]\.m?\.?", re.IGNORECASE)
+_INITIAL = re.compile(r"\b[A-Z]\.")
+_ABBREVIATION = re.compile(
+    r"\b(?:Rs|USD|INR|Dr|Mr|Mrs|Ms|Prof|Sr|Jr|St|No|Nos|approx|est|vs|etc"
+    r"|Inc|Ltd|Pvt|Pte|Co|Apt|Ext|Ref|Fig|Ave|Rd|Blvd)\.",
+    re.IGNORECASE,
+)
+_NON_TERMINAL_PERIODS = (_DECIMAL_POINT, _CLOCK_MERIDIEM, _ABBREVIATION, _INITIAL)
+_TERMINAL_PUNCTUATION = ".!?"
+
+
+def is_single_sentence(reason: str) -> bool:
+    """Report whether ``reason`` is exactly one sentence ending in terminal punctuation.
+
+    The final character is checked first and then excluded from the body scan, so a reason
+    that legitimately ends on an abbreviation ("...delivered by 6 p.m.") keeps its
+    terminator instead of having it masked away.
+    """
+    if reason != reason.strip() or "\r" in reason or "\n" in reason:
+        return False
+    if not reason or reason[-1] not in _TERMINAL_PUNCTUATION:
+        return False
+    body = reason[:-1]
+    for pattern in _NON_TERMINAL_PERIODS:
+        body = pattern.sub(lambda match: "_" * len(match.group()), body)
+    return not any(character in _TERMINAL_PUNCTUATION for character in body)
+
+
 # A double-quoted span in a reason is quoted evidence — the phrase that fired a scanner,
 # the words an injection attempt used. §9.7.3 asks for exactly that phrase rather than a
 # boolean, and the phrase is frequently second-person ("share your OTP") or names the
@@ -414,7 +460,7 @@ def reason_issues(reason: str) -> tuple[ValidationIssue, ...]:
                 "reason",
             )
         )
-    if reason != reason.strip() or _ONE_SENTENCE_PATTERN.fullmatch(reason) is None:
+    if not is_single_sentence(reason):
         issues.append(
             _issue(
                 "reason_sentence_count",

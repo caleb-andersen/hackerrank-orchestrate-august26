@@ -320,6 +320,70 @@ class ReasonStyleTest(unittest.TestCase):
             "reason_sentence_count",
         )
 
+    def test_it_accepts_internal_periods_that_end_no_sentence(self) -> None:
+        """The style contract asks for the concrete detail; concrete details carry periods.
+
+        Each of these is one sentence. The previous counter read every "." as a boundary
+        and rejected all of them, which pushed the best-evidenced rows to the fallback.
+        """
+        for label, reason in (
+            (
+                "currency amount",
+                "Society admin asks residents to clear the pending maintenance transfer of "
+                "Rs. 2,500 before the tanker arrives.",
+            ),
+            (
+                "title abbreviation",
+                "Clinic confirms the appointment with Dr. Rao has moved to Thursday, and "
+                "this recipient replies to every clinic notice.",
+            ),
+            (
+                "decimal number",
+                "Payment-pressure scanner scores 0.75 on this notice while the sending "
+                "account carries three recent reports.",
+            ),
+            (
+                "clock time",
+                "Courier says the parcel now arrives at 4.30 p.m. today, inside the "
+                "delivery window this recipient asked for.",
+            ),
+            (
+                "order reference",
+                "Vendor references order no. 4821 and asks for confirmation, and this "
+                "recipient opened both previous order updates.",
+            ),
+            (
+                "terminal abbreviation",
+                "Pharmacy notice says the prescription is ready for collection before "
+                "the dispensary counter closes at 6 p.m.",
+            ),
+        ):
+            with self.subTest(case=label):
+                self.assertIsInstance(
+                    coerce_and_check(_raw(reason=reason), _dossier()),
+                    ValidatedDecision,
+                )
+
+    def test_it_still_rejects_two_sentences_containing_an_abbreviation(self) -> None:
+        """Fixing the counter must not loosen the contract to "one sentence"."""
+        for label, reason in (
+            (
+                "abbreviation then boundary",
+                "The maintenance transfer of Rs. 2,500 is pending. The society admin "
+                "will not repeat this notice again.",
+            ),
+            (
+                "boundary then abbreviation",
+                "The tanker leaves in twenty minutes. Dr. Rao has already confirmed the "
+                "appointment for the following morning.",
+            ),
+        ):
+            with self.subTest(case=label):
+                _assert_failure(
+                    coerce_and_check(_raw(reason=reason), _dossier()),
+                    "reason_sentence_count",
+                )
+
     def test_it_rejects_reasons_outside_the_character_bounds(self) -> None:
         for reason in (
             "The payment is due.",

@@ -937,20 +937,36 @@ class FallbackRowTest(unittest.TestCase):
         self.assertIn("digest", reason)
         self.assertEqual(reason_issues(reason), ())
 
-    def test_a_descriptor_that_breaks_the_contract_falls_back(self) -> None:
-        # A full stop inside a group name would make the cell two sentences.
+    def _with_group_name(self, name: str):
         dossier = _dossier(conversation_type="group")
-        broken = replace(
+        return replace(
             dossier,
             relationship=replace(
                 dossier.relationship,
                 group_context=replace(
-                    dossier.relationship.group_context, group_name="Dr. Rao's Clinic"
+                    dossier.relationship.group_context, group_name=name
                 ),
             ),
         )
+
+    def test_a_descriptor_that_breaks_the_contract_falls_back(self) -> None:
+        # A real sentence boundary inside a group name would make the cell two sentences,
+        # so the personalised descriptor is abandoned for the generic cell.
+        broken = self._with_group_name("Water Crew. Emergency Line")
         self.assertEqual(_fallback_reason(broken), GENERIC_FALLBACK_REASON)
         self.assertEqual(reason_issues(GENERIC_FALLBACK_REASON), ())
+
+    def test_an_abbreviation_in_a_descriptor_keeps_the_personalised_cell(self) -> None:
+        """"Dr." is not a sentence boundary, so the row keeps the more informative reason.
+
+        This case previously degraded to the generic cell, because the sentence counter
+        read every "." as terminal. Naming the group is strictly more useful, so the
+        degrade must fire only on a descriptor that genuinely breaks the contract.
+        """
+        reason = _fallback_reason(self._with_group_name("Dr. Rao's Clinic"))
+        self.assertIn("Dr. Rao's Clinic", reason)
+        self.assertNotEqual(reason, GENERIC_FALLBACK_REASON)
+        self.assertEqual(reason_issues(reason), ())
 
     def test_the_type_is_derived_rather_than_always_unknown(self) -> None:
         self.assertEqual(
